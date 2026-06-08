@@ -1,0 +1,50 @@
+services:
+  sbom-scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sbom-scanner
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+    environment:
+      # Where to write scan reports (must match volume mount below)
+      REPORT_DIR: /data/sbom-reports
+
+      # Comma-separated filesystem paths to scan with target=filesystem or target=all
+      # Leave empty if you only scan Docker/K8s images
+      SCAN_SOURCES: /data/app,/opt/myapp
+
+      # Timeout in seconds per image for Syft / Grype
+      # Increase for very large images (e.g. CUDA runtimes >10 GB)
+      SYFT_TIMEOUT: "900"
+      GRYPE_TIMEOUT: "600"
+
+      # Optional: path to kubeconfig for Kubernetes scanning
+      # KUBECONFIG: /root/.kube/config
+
+    volumes:
+      # Docker socket (read-only) — required for Docker image scanning
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+      # Persistent report storage
+      - sbom-reports:/data/sbom-reports
+
+      # Mount filesystem paths you want to scan (read-only recommended)
+      # - /opt/myapp:/data/app:ro
+
+      # Optional: mount kubeconfig for K8s scanning
+      # - ~/.kube:/root/.kube:ro
+
+      # Persistent Grype vulnerability DB cache (avoids re-download on restart)
+      - grype-db:/root/.cache/grype
+
+    networks:
+      - sbom-net
+
+volumes:
+  sbom-reports:
+  grype-db:
+
+networks:
+  sbom-net:

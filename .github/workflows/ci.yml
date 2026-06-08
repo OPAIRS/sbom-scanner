@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t sbom-scanner:ci .
+
+      - name: Start service
+        run: |
+          docker run -d \
+            --name sbom-scanner-ci \
+            -p 8100:8100 \
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            sbom-scanner:ci
+          sleep 5
+
+      - name: Health check
+        run: |
+          STATUS=$(curl -sf http://localhost:8100/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+          echo "Health: $STATUS"
+          [ "$STATUS" = "ok" ]
+
+      - name: List images endpoint
+        run: curl -sf http://localhost:8100/images
+
+      - name: Trigger scan and wait
+        run: |
+          SCAN_ID=$(curl -sf -X POST http://localhost:8100/scan \
+            -H "Content-Type: application/json" \
+            -d '{"target": "images", "severity_threshold": "critical"}' \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['scan_id'])")
+          echo "Scan ID: $SCAN_ID"
+
+          # Poll up to 10 minutes
+          for i in $(seq 1 120); do
+            STATUS=$(curl -sf "http://localhost:8100/scan/$SCAN_ID" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+            echo "[$i] $STATUS"
+            if [[ "$STATUS" == "completed" || "$STATUS" == "failed" ]]; then break; fi
+            sleep 5
+          done
+
+          [ "$STATUS" = "completed" ]
