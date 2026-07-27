@@ -134,8 +134,9 @@ def flatten_k8s_images(ns_images: dict[str, list[str]]) -> list[str]:
 
 # ── Scan Helpers ──────────────────────────────────────────────────────────────
 
+
 def run_syft(target: str, output_path: Path) -> bool:
-    cmd = ["syft", target, "-o", f"syft-json={output_path}", "--quiet"]
+    cmd = ["syft", target, "-o", f"cyclonedx-json={output_path}", "--quiet"]
     logger.info(f"syft → {target}")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=SYFT_TIMEOUT)
