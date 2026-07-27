@@ -207,7 +207,7 @@ The CRA (applicable from late 2027) requires manufacturers of products with digi
 
 `sbom-scanner` supports this by providing:
 
-- Machine-readable SBOMs in Syft JSON format per scan target
+- CycloneDX JSON format according to CRA
 - CVE reports with severity classification and fix version information
 - A persistent audit trail of all scans under `REPORT_DIR`
 - REST API integration for CI/CD pipelines and dashboards
