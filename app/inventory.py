@@ -15,14 +15,52 @@ _DIGEST_RE = re.compile(r"(sha256:[0-9a-f]{64})")
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 
+_warned_containers: set[str] = set()
+
+
+def _warn_once(container_name: str, message: str) -> None:
+    """One warning per container and message, so a broken container does not flood the log every tick."""
+    key = f"{container_name}:{message}"
+    if key not in _warned_containers:
+        _warned_containers.add(key)
+        logger.warning(f"container {container_name}: {message}")
+
+
+def _resolve_image(client, container):
+    """The image object of a running container, or None when its image is no longer in the local daemon.
+
+    A container can outlive its image (the tag was moved by a rebuild and the old layers were pruned). Looking up
+    ``container.image`` then raises ImageNotFound. Fall back to the image name from the container's config, which
+    is what Syft can still scan, and give up on this one container instead of the whole inventory.
+    """
+    try:
+        return container.image
+    except Exception:  # noqa: BLE001 - docker.errors.ImageNotFound and API errors
+        pass
+    name = (container.attrs.get("Config") or {}).get("Image")
+    if name:
+        try:
+            return client.images.get(name)
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
 def get_running_docker_inventory() -> dict[str, Optional[str]]:
-    """{image tag (or short id): full image id} for all running containers. Raises on Docker errors."""
+    """{image tag (or short id): full image id} for all running containers.
+
+    Raises on Docker daemon errors. A single container whose image is gone is skipped with a warning.
+    """
     import docker
 
     client = docker.from_env()
     inventory: dict[str, Optional[str]] = {}
     for container in client.containers.list():
-        image = container.image
+        image = _resolve_image(client, container)
+        if image is None:
+            _warn_once(container.name, "image is no longer available locally, skipped "
+                                       "(recreate the container to scan it)")
+            continue
         tag = image.tags[0] if image.tags else image.short_id
         inventory.setdefault(tag, image.id)
     return inventory

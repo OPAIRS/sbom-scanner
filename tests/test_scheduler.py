@@ -75,3 +75,33 @@ def test_first_tick_retention_runs_once_a_day(sched, monkeypatch):
     asyncio.run(sched.tick())
     asyncio.run(sched.tick())
     assert calls == [1]
+
+
+def test_docker_inventory_skips_container_whose_image_is_gone(monkeypatch):
+    import sys
+    import types
+
+    class Img:
+        def __init__(self, tag, id_):
+            self.tags, self.id, self.short_id = [tag] if tag else [], id_, id_[:12]
+
+    class Gone:
+        name = "orphan"
+        attrs = {"Config": {"Image": "old:1"}}
+
+        @property
+        def image(self):
+            raise RuntimeError("404 No such image")
+
+    class Ok:
+        name = "fine"
+        attrs = {}
+        image = Img("app:1", "sha256:" + "a" * 64)
+
+    class Client:
+        containers = types.SimpleNamespace(list=lambda: [Gone(), Ok()])
+        images = types.SimpleNamespace(get=lambda n: (_ for _ in ()).throw(RuntimeError("gone")))
+
+    fake = types.SimpleNamespace(from_env=lambda: Client())
+    monkeypatch.setitem(sys.modules, "docker", fake)
+    assert inventory.get_running_docker_inventory() == {"app:1": "sha256:" + "a" * 64}
