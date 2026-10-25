@@ -79,7 +79,13 @@ def run_syft(cfg: Settings, target: str, output_path: Path, env: dict) -> None:
     except subprocess.TimeoutExpired:
         raise ScanError(f"syft timeout ({cfg.syft_timeout}s)")
     if result.returncode != 0 or not output_path.exists():
-        raise ScanError(f"syft failed: {result.stderr.strip()[:300]}")
+        raise ScanError(f"syft failed (exit {result.returncode}{_oom_hint(result.returncode)}): "
+                        f"{result.stderr.strip()[:300]}")
+
+
+def _oom_hint(returncode: int) -> str:
+    """Exit -9 means SIGKILL, in a container almost always the kernel's out-of-memory killer."""
+    return ", killed - probably out of memory, raise the container memory limit" if returncode == -9 else ""
 
 
 def run_grype(cfg: Settings, sbom_path: Path, env: dict) -> dict:
@@ -93,7 +99,8 @@ def run_grype(cfg: Settings, sbom_path: Path, env: dict) -> dict:
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
-        raise ScanError(f"grype produced no JSON (exit {result.returncode}): {result.stderr.strip()[:300]}")
+        raise ScanError(f"grype produced no JSON (exit {result.returncode}{_oom_hint(result.returncode)}): "
+                        f"{result.stderr.strip()[:300]}")
 
 
 def update_grype_db(cfg: Settings) -> tuple[bool, Optional[str]]:

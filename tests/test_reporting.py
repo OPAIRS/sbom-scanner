@@ -159,3 +159,30 @@ def test_smtp_roundtrip_builds_multipart(mail_cfg, monkeypatch):
     assert captured["tls"] and captured["login"] == ("u", "p")
     assert msg["To"] == "it@example.org" and msg["X-Priority"] == "1" and msg["Auto-Submitted"] == "auto-generated"
     assert msg.is_multipart() and {p.get_content_type() for p in msg.iter_parts()} == {"text/plain", "text/html"}
+
+
+def test_same_advisory_in_several_images_and_packages_is_listed_once(mail_cfg, store, outbox):
+    store.mark_inventory("docker", {"a:1": None, "b:1": None})
+    for target in ("a:1", "b:1"):
+        store.ingest_findings(target, [
+            finding("CVE-2026-1", severity="Critical", pkg="libssl3", version="3.0", fix_versions=["3.1"]),
+            finding("CVE-2026-1", severity="Critical", pkg="libcrypto3", version="3.0", fix_versions=["3.1"]),
+            finding("CVE-2026-2", severity="Critical", pkg="busybox", version="1.0", fix_versions=["1.1"]),
+        ], prio(mail_cfg), baseline=True)
+    reporting.send_digest(mail_cfg, store, FakeSlm(mail_cfg, enabled=False))
+    text = outbox[-1][1]
+    assert text.count("CVE-2026-1 —") == 1
+    assert "a:1, b:1" in text
+    assert "libssl3" in text and "libcrypto3" in text                  # both packages get an action line
+    assert text.count("CVE-2026-2 —") == 1
+
+
+def test_group_findings_keeps_order_and_collects_targets():
+    rows = [
+        {"vuln_id": "X", "target": "a", "pkg": "p", "version": "1", "fix_versions": ["2"]},
+        {"vuln_id": "Y", "target": "a", "pkg": "q", "version": "1", "fix_versions": []},
+        {"vuln_id": "X", "target": "b", "pkg": "p", "version": "1", "fix_versions": ["2"]},
+    ]
+    grouped = reporting.group_findings(rows)
+    assert [g["vuln_id"] for g in grouped] == ["X", "Y"]
+    assert grouped[0]["targets"] == ["a", "b"] and len(grouped[0]["pkgs"]) == 1

@@ -151,16 +151,50 @@ def _link(f: dict) -> str:
     return f"https://osv.dev/vulnerability/{f['vuln_id']}"
 
 
+def group_findings(rows: list[dict]) -> list[dict]:
+    """Merge rows that describe the same advisory (one CVE in several images or several packages of one image).
+
+    The first row of each advisory keeps its position, so a pre-sorted list stays sorted. The merged row carries
+    ``targets`` and ``pkgs`` (unique, in order of appearance) in addition to the usual fields.
+    """
+    groups: dict[str, dict] = {}
+    for f in rows:
+        g = groups.get(f["vuln_id"])
+        if g is None:
+            g = groups[f["vuln_id"]] = {**f, "targets": [], "pkgs": []}
+        if f["target"] not in g["targets"]:
+            g["targets"].append(f["target"])
+        key = (f["pkg"], f["version"], tuple(f.get("fix_versions") or []))
+        if key not in g["pkgs"]:
+            g["pkgs"].append(key)
+    return list(groups.values())
+
+
+_MAX_TARGETS_SHOWN = 4
+_MAX_ACTIONS_SHOWN = 3
+
+
 def finding_item(cfg: Settings, f: dict, note: Optional[str] = None) -> dict:
-    fixes = f.get("fix_versions") or []
     epss = f"{f['epss']:.0%}" if f.get("epss") is not None else "n/a"
     cvss = f"{f['cvss']:.1f}" if f.get("cvss") is not None else "n/a"
-    lines = [
-        f"{_s(cfg, 'container')}: {f['target']}",
-        _s(cfg, "scores", cvss=cvss, epss=epss, ransom=_s(cfg, "ransom") if f.get("ransomware") else ""),
-        _s(cfg, "action_fix", pkg=f["pkg"], fix=", ".join(fixes[:3])) if fixes else _s(cfg, "action_nofix"),
-    ]
-    return {"title": f"{f['vuln_id']} — {f['pkg']} {f['version']} ({f['severity']})",
+    targets = f.get("targets") or [f["target"]]
+    pkgs = f.get("pkgs") or [(f["pkg"], f["version"], tuple(f.get("fix_versions") or []))]
+
+    shown = targets[:_MAX_TARGETS_SHOWN]
+    extra = len(targets) - len(shown)
+    container_line = f"{_s(cfg, 'container')}: {', '.join(shown)}" + (f" (+{extra})" if extra > 0 else "")
+
+    lines = [container_line,
+             _s(cfg, "scores", cvss=cvss, epss=epss, ransom=_s(cfg, "ransom") if f.get("ransomware") else "")]
+    actions = [_s(cfg, "action_fix", pkg=pkg, fix=", ".join(fix[:3])) for pkg, _ver, fix in pkgs if fix]
+    if actions:
+        lines.extend(actions[:_MAX_ACTIONS_SHOWN])
+    else:
+        lines.append(_s(cfg, "action_nofix"))
+
+    first_pkg, first_ver, _fix = pkgs[0]
+    more_pkgs = f" +{len(pkgs) - 1}" if len(pkgs) > 1 else ""
+    return {"title": f"{f['vuln_id']} — {first_pkg} {first_ver}{more_pkgs} ({f['severity']})",
             "lines": lines, "link": _link(f), "note": note}
 
 
@@ -197,13 +231,14 @@ def build_alert(cfg: Settings, findings: list[tuple[dict, int]], malware: list[d
         cap = max(0, cap - len(shown))
 
     for prio, key in ((PRIO_KEV, "kev"), (PRIO_SEVERITY, "severity"), (PRIO_EPSS, "epss")):
-        group = [f for f, p in findings if p == prio]
-        if not group:
+        raw = [f for f, p in findings if p == prio]
+        if not raw:
             continue
+        group = group_findings(raw)
         shown = group[:cap]
         sections.append({"title": _s(cfg, key), "items": [finding_item(cfg, f, note_for("finding", f)) for f in shown],
                          "more": len(group) - len(shown)})
-        parts.append(_s(cfg, f"subj_{key}", n=len(group)))
+        parts.append(_s(cfg, f"subj_{key}", n=len(raw)))
         cap = max(0, cap - len(shown))
 
     urgent = bool(malware) or any(p == PRIO_KEV for _, p in findings)
@@ -279,13 +314,14 @@ def build_digest(cfg: Settings, store: Store, slm: SlmClient, disk: Optional[dic
     if malware:
         sections.append({"title": _s(cfg, "malware"), "items": [malware_item(cfg, h) for h in malware[:cfg.alert_max_items]]})
 
-    top = [r for r in open_rows if r["kev"] or sev_rank(r["severity"]) >= sev_rank("Critical")][:10]
+    top = group_findings([r for r in open_rows if r["kev"] or sev_rank(r["severity"]) >= sev_rank("Critical")])[:10]
     if top:
         sections.append({"title": _s(cfg, "digest_top"), "items": [finding_item(cfg, f) for f in top]})
 
     new_rows = sorted(changes["new"], key=lambda r: (not r["kev"], -sev_rank(r["severity"]), -(r["epss"] or 0)))
-    in_top = {r["id"] for r in top}
-    new_rows = [r for r in new_rows if r["id"] not in in_top and (r["kev"] or sev_rank(r["severity"]) >= sev_rank("High"))][:10]
+    in_top = {r["vuln_id"] for r in top}
+    new_rows = group_findings([r for r in new_rows if r["vuln_id"] not in in_top
+                               and (r["kev"] or sev_rank(r["severity"]) >= sev_rank("High"))])[:10]
     if new_rows:
         sections.append({"title": _s(cfg, "digest_new"), "items": [finding_item(cfg, f) for f in new_rows]})
 
