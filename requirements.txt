@@ -1,6 +1,7 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
+fastapi==0.162.0
+starlette==1.10.0
+uvicorn[standard]==0.54.0
 docker==7.1.0
-pydantic==2.9.2
+pydantic==2.14.1
 kubernetes==30.1.0
-tzdata==2024.2
+tzdata==2026.5
