@@ -88,8 +88,52 @@ def _oom_hint(returncode: int) -> str:
     return ", killed - probably out of memory, raise the container memory limit" if returncode == -9 else ""
 
 
+def _drop_unmatchable_components(components: list) -> int:
+    """Remove ML-model components without purl/CPE (recursively). Returns how many were removed."""
+    removed = 0
+    kept = []
+    for c in components:
+        if not isinstance(c, dict):
+            kept.append(c)
+            continue
+        if c.get("type") == "machine-learning-model" and not c.get("purl") and not c.get("cpe"):
+            removed += 1
+            continue
+        if isinstance(c.get("components"), list):
+            removed += _drop_unmatchable_components(c["components"])
+        kept.append(c)
+    components[:] = kept
+    return removed
+
+
+def sanitize_sbom_for_grype(sbom_path: Path) -> tuple[Path, int]:
+    """Path of an SBOM Grype can read safely, and the number of components left out.
+
+    Syft lists model weights (.safetensors, .gguf) as ``machine-learning-model`` components without purl or CPE.
+    Grype's CycloneDX decoder recurses on their properties without bound and eats memory until the OOM killer ends it
+    (anchore/grype#3767, #3824, open as of Oct 2026). Such components cannot match a vulnerability anyway, so they
+    are removed from a copy; the archived SBOM stays complete. Without any such component the original is used.
+    """
+    try:
+        data = json.loads(sbom_path.read_text())
+    except (OSError, ValueError):
+        return sbom_path, 0
+    components = data.get("components")
+    if not isinstance(components, list):
+        return sbom_path, 0
+    removed = _drop_unmatchable_components(components)
+    if not removed:
+        return sbom_path, 0
+    clean = sbom_path.with_name(sbom_path.stem + ".grype.json")
+    clean.write_text(json.dumps(data))
+    return clean, removed
+
+
 def run_grype(cfg: Settings, sbom_path: Path, env: dict) -> dict:
     """Run Grype on an SBOM. Raises ScanError instead of returning an empty (= 'clean') result."""
+    sbom_path, removed = sanitize_sbom_for_grype(sbom_path)
+    if removed:
+        logger.info(f"grype: left out {removed} machine-learning-model component(s) without purl/CPE (Grype memory bug)")
     cmd = _cmd(cfg, ["grype", f"sbom:{sbom_path}", "-o", "json", "--quiet"])
     logger.info("grype → %s", sbom_path.name)
     try:

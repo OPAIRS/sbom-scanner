@@ -113,3 +113,27 @@ def test_is_osv_purl():
     assert scanner.is_osv_purl("pkg:npm/left-pad@1.3.0")
     assert not scanner.is_osv_purl("pkg:npm/left-pad")               # unversioned would match every version
     assert not scanner.is_osv_purl("pkg:deb/debian/openssl@3.0.1")
+
+
+def test_ml_model_components_without_purl_are_left_out_for_grype(tmp_path):
+    sbom = tmp_path / "sbom.cdx.json"
+    sbom.write_text(json.dumps({"components": [
+        {"type": "library", "name": "requests", "purl": "pkg:pypi/requests@2.0"},
+        {"type": "machine-learning-model", "name": "weights.safetensors"},
+        {"type": "machine-learning-model", "name": "known", "purl": "pkg:huggingface/x/y@1"},
+        {"type": "library", "name": "outer", "components": [{"type": "machine-learning-model", "name": "nested.gguf"}]},
+    ]}))
+    clean, removed = scanner.sanitize_sbom_for_grype(sbom)
+    assert removed == 2 and clean != sbom
+    names = [c["name"] for c in json.loads(clean.read_text())["components"]]
+    assert names == ["requests", "known", "outer"]
+    assert "nested.gguf" in sbom.read_text()                       # the archived original stays complete
+
+
+def test_sbom_without_ml_components_is_used_unchanged(tmp_path):
+    sbom = tmp_path / "sbom.cdx.json"
+    sbom.write_text(json.dumps({"components": [{"type": "library", "name": "a", "purl": "pkg:pypi/a@1"}]}))
+    assert scanner.sanitize_sbom_for_grype(sbom) == (sbom, 0)
+    broken = tmp_path / "broken.json"
+    broken.write_text("not json")
+    assert scanner.sanitize_sbom_for_grype(broken) == (broken, 0)
