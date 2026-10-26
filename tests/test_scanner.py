@@ -137,3 +137,27 @@ def test_sbom_without_ml_components_is_used_unchanged(tmp_path):
     broken = tmp_path / "broken.json"
     broken.write_text("not json")
     assert scanner.sanitize_sbom_for_grype(broken) == (broken, 0)
+
+
+def _capture_syft_command(monkeypatch, cfg, target):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        out = Path(next(a.split("=", 1)[1] for a in cmd if a.startswith("cyclonedx-json=")))
+        out.write_text("{}")
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(scanner.subprocess, "run", fake_run)
+    return seen
+
+
+def test_syft_skips_model_weights_for_images_only(monkeypatch, cfg, tmp_path):
+    seen = _capture_syft_command(monkeypatch, cfg, "vllm/vllm-openai:v1")
+    scanner.run_syft(cfg, "vllm/vllm-openai:v1", tmp_path / "a.json", {})
+    cmd = seen["cmd"]
+    assert cmd.count("--exclude") == 2 and "/**/*.safetensors" in cmd and "/**/*.gguf" in cmd
+
+    seen = _capture_syft_command(monkeypatch, cfg, "/opt/app")
+    scanner.run_syft(cfg, "/opt/app", tmp_path / "b.json", {})
+    assert "--exclude" not in seen["cmd"]                           # directory scans use other glob rules

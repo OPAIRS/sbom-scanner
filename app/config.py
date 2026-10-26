@@ -48,6 +48,9 @@ class Settings:
 
     # ── scanning (unchanged from v1.1) ───────────────────────────────────────
     scan_sources: list[str] = field(default_factory=list)
+    # Globs Syft skips when scanning images. Model weights cannot contain package vulnerabilities, but Syft's
+    # safetensors/GGUF handling can grow without bound on them (see scanner.sanitize_sbom_for_grype).
+    syft_exclude: list[str] = field(default_factory=lambda: ["/**/*.safetensors", "/**/*.gguf"])
     syft_timeout: int = 900
     grype_timeout: int = 600
     kubeconfig: str = "/root/.kube/config"
@@ -145,6 +148,7 @@ class Settings:
             report_dir=Path(os.getenv("REPORT_DIR", "/data/sbom-reports")),
             data_dir=Path(os.getenv("DATA_DIR", "/data/sbom-data")),
             scan_sources=_list("SCAN_SOURCES"),
+            syft_exclude=_list("SYFT_EXCLUDE", "/**/*.safetensors,/**/*.gguf"),
             syft_timeout=_int("SYFT_TIMEOUT", 900),
             grype_timeout=_int("GRYPE_TIMEOUT", 600),
             kubeconfig=os.getenv("KUBECONFIG", "/root/.kube/config"),

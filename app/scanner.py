@@ -72,7 +72,11 @@ def _cmd(cfg: Settings, args: list[str]) -> list[str]:
 # ── tools ─────────────────────────────────────────────────────────────────────
 
 def run_syft(cfg: Settings, target: str, output_path: Path, env: dict) -> None:
-    cmd = _cmd(cfg, ["syft", target, "-o", f"cyclonedx-json={output_path}", "--quiet"])
+    args = ["syft", target, "-o", f"cyclonedx-json={output_path}", "--quiet"]
+    if not target.startswith((".", "/")):                      # image: absolute globs; directories need other syntax
+        for pattern in cfg.syft_exclude:
+            args += ["--exclude", pattern]
+    cmd = _cmd(cfg, args)
     logger.info(f"syft → {target}")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=cfg.syft_timeout, env=env)

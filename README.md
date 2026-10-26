@@ -139,6 +139,7 @@ All configuration is via environment variables (see `docker-compose.yml`).
 | `DATA_DIR` | `/data/sbom-data` | State DB, SBOM archive, scratch space (mount a volume here) |
 | `SCAN_SOURCES` | *(empty)* | Comma-separated filesystem paths for `target=filesystem` |
 | `SYFT_TIMEOUT` / `GRYPE_TIMEOUT` | `900` / `600` | Max seconds per target |
+| `SYFT_EXCLUDE` | `/**/*.safetensors,/**/*.gguf` | Comma-separated globs Syft skips in images. Model weights hold no packages, and Syft/Grype can grow without bound on them (anchore/grype#3767, #3824). Empty = scan everything |
 | `KUBECONFIG` | `/root/.kube/config` | Kubeconfig for Kubernetes scanning |
 | `SCAN_NICE` | `10` | CPU priority of Syft/Grype (0 = off) |
 
