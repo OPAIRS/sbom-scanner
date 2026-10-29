@@ -13,10 +13,17 @@
 #   sbom-scan reports             → list all saved reports
 #   sbom-scan summary <scan_id>   → show consolidated summary JSON
 #   sbom-scan top    <scan_id>    → top offenders table (Critical + High)
+#   sbom-scan state               → scheduler, DB, open findings, disk, mail, SLM
+#   sbom-scan findings [min_sev]  → open findings (actively exploited first)
+#   sbom-scan malware             → open supply-chain malware hits
+#   sbom-scan mail-test           → send a test mail
+#   sbom-scan digest              → send the daily report now
+#   sbom-scan cleanup             → run retention now (old reports, SBOM archive, temp dirs)
 #
 # Environment:
 #   SBOM_API   API base URL (default: http://localhost:8100)
-#   SEVERITY   Severity threshold for --fail-on (default: medium)
+#   SEVERITY   Severity threshold reported in the summary (default: medium)
+#   SBOM_API_KEY  API key, if the service runs with API_KEY set
 
 set -euo pipefail
 
@@ -25,12 +32,13 @@ SEVERITY="${SEVERITY:-medium}"
 cmd="${1:-all}"
 
 _json() { python3 -m json.tool; }
+_curl() { curl -sf ${SBOM_API_KEY:+-H "X-API-Key: $SBOM_API_KEY"} "$@"; }
 
 case "$cmd" in
 
   images|filesystem|k8s|all)
     echo "▶ Starting scan: target=$cmd, severity=$SEVERITY"
-    RESPONSE=$(curl -sf -X POST "$API/scan" \
+    RESPONSE=$(_curl -X POST "$API/scan" \
       -H "Content-Type: application/json" \
       -d "{\"target\": \"$cmd\", \"severity_threshold\": \"$SEVERITY\"}")
     SCAN_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['scan_id'])")
@@ -43,19 +51,19 @@ case "$cmd" in
 
   status)
     SCAN_ID="${2:?Usage: $0 status <scan_id>}"
-    curl -sf "$API/scan/$SCAN_ID" | _json
+    _curl "$API/scan/$SCAN_ID" | _json
     ;;
 
   watch)
     SCAN_ID="${2:?Usage: $0 watch <scan_id>}"
     echo "▶ Watching $SCAN_ID (Ctrl+C to abort)..."
     while true; do
-      STATUS=$(curl -sf "$API/scan/$SCAN_ID" | python3 -c \
+      STATUS=$(_curl "$API/scan/$SCAN_ID" | python3 -c \
         "import sys,json; print(json.load(sys.stdin)['status'])")
       echo "[$(date +%T)] $STATUS"
       if [[ "$STATUS" == "completed" || "$STATUS" == "failed" ]]; then
         echo ""
-        curl -sf "$API/scan/$SCAN_ID" | _json
+        _curl "$API/scan/$SCAN_ID" | _json
         break
       fi
       sleep 5
@@ -63,17 +71,17 @@ case "$cmd" in
     ;;
 
   reports)
-    curl -sf "$API/reports" | _json
+    _curl "$API/reports" | _json
     ;;
 
   summary)
     SCAN_ID="${2:?Usage: $0 summary <scan_id>}"
-    curl -sf "$API/reports/$SCAN_ID/summary" | _json
+    _curl "$API/reports/$SCAN_ID/summary" | _json
     ;;
 
   top)
     SCAN_ID="${2:?Usage: $0 top <scan_id>}"
-    curl -sf "$API/reports/$SCAN_ID/summary" | python3 - <<'PY'
+    _curl "$API/reports/$SCAN_ID/summary" | python3 - <<'PY'
 import sys, json
 data = json.load(sys.stdin)
 results = sorted(
@@ -93,22 +101,47 @@ for r in results:
 PY
     ;;
 
+  state)
+    _curl "$API/status" | _json
+    ;;
+
+  findings)
+    MIN="${2:-}"
+    _curl "$API/findings${MIN:+?min_severity=$MIN}" | _json
+    ;;
+
+  malware)
+    _curl "$API/malware" | _json
+    ;;
+
+  mail-test)
+    _curl -X POST "$API/mail/test" | _json
+    ;;
+
+  digest)
+    _curl -X POST "$API/report/digest" | _json
+    ;;
+
+  cleanup)
+    _curl -X POST "$API/maintenance/cleanup" | _json
+    ;;
+
   images-list)
     echo "▶ Scannable Docker images:"
-    curl -sf "$API/images" | _json
+    _curl "$API/images" | _json
     ;;
 
   k8s-list)
     NAMESPACE="${2:-}"
     echo "▶ Kubernetes images${NAMESPACE:+ in namespace $NAMESPACE}:"
     URL="$API/k8s/images${NAMESPACE:+?namespace=$NAMESPACE}"
-    curl -sf "$URL" | _json
+    _curl "$URL" | _json
     ;;
 
   *)
     # Treat as specific image or path
     echo "▶ Scanning specific target: $cmd"
-    curl -sf -X POST "$API/scan" \
+    _curl -X POST "$API/scan" \
       -H "Content-Type: application/json" \
       -d "{\"target\": \"$cmd\", \"severity_threshold\": \"$SEVERITY\"}" \
       | _json

@@ -5,11 +5,13 @@ services:
       dockerfile: Dockerfile
     container_name: sbom-scanner
     restart: unless-stopped
+    init: true
     ports:
       - "8100:8100"
     environment:
-      # Where to write scan reports (must match volume mount below)
+      # ── Paths (must match the volume mounts below) ───────────────────────────
       REPORT_DIR: /data/sbom-reports
+      DATA_DIR: /data/sbom-data            # state DB, SBOM archive, temp work dirs
 
       # Comma-separated filesystem paths to scan with target=filesystem or target=all
       # Leave empty if you only scan Docker/K8s images
@@ -23,12 +25,58 @@ services:
       # Optional: path to kubeconfig for Kubernetes scanning
       # KUBECONFIG: /root/.kube/config
 
+      # ── Continuous operation ─────────────────────────────────────────────────
+      SCHEDULER_ENABLED: "true"            # false = only manual scans via the API
+      SCHEDULER_TARGETS: images,filesystem,k8s
+      BATCH_SIZE: "2"                      # targets scanned per cycle (small increments)
+      TICK_SECONDS: "300"                  # idle wait between cycles
+      RESCAN_HOURS: "24"                   # periodic rescan even without a DB change
+      DB_UPDATE_HOURS: "6"                 # Grype vulnerability DB refresh interval
+      SCAN_NICE: "10"                      # run syft/grype at lower CPU priority
+      # OFFLINE_MODE: "true"               # no outbound calls (no DB update, no KEV, no OSV)
+
+      # ── Disk hygiene ─────────────────────────────────────────────────────────
+      REPORT_KEEP_DAYS: "30"
+      REPORT_MAX_SCANS: "100"
+      SBOM_KEEP_PER_TARGET: "3"            # archived SBOM versions per image (gzip)
+      DATA_BUDGET_GB: "10"                 # soft cap; oldest reports are pruned first
+
+      # ── Alert policy ─────────────────────────────────────────────────────────
+      ALERT_MIN_SEVERITY: Critical         # Critical | High | Medium
+      ALERT_ON_KEV: "true"                 # actively exploited (CISA KEV) always alerts
+      ALERT_EPSS_THRESHOLD: "0.5"          # High + EPSS >= x alerts too; 0 disables
+      ALERT_ON_FIRST_SCAN: "false"         # first scan of a target goes to the daily digest
+      KEV_ENABLED: "true"
+      OSV_ENABLED: "true"                  # supply-chain malware check (osv.dev MAL-* advisories)
+
+      # ── Mail (leave SMTP_HOST empty to disable) ──────────────────────────────
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}    # or SMTP_PASSWORD_FILE with a Docker secret
+      SMTP_STARTTLS: "true"                # SMTP_SSL=true for implicit TLS (port 465)
+      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_TO: ${MAIL_TO:-}                # comma-separated
+      REPORT_LANG: de                      # de | en
+      REPORT_TZ: Europe/Vienna
+      DIGEST_HOUR: "7"                     # daily report, local time of REPORT_TZ
+
+      # ── Local CPU-only language model (start with: docker compose --profile slm up -d) ──
+      SLM_URL: ${SLM_URL:-}                # e.g. http://slm:8080 — empty = plain-text mails
+
+      # ── API protection (recommended if port 8100 is reachable from other hosts) ──
+      API_KEY: ${API_KEY:-}                # clients send it as X-API-Key
+
     volumes:
       # Docker socket (read-only) — required for Docker image scanning
+      # Note: ":ro" does not restrict the Docker API; treat this container as privileged.
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
       # Persistent report storage
       - sbom-reports:/data/sbom-reports
+
+      # State database, SBOM archive and scratch space
+      - sbom-data:/data/sbom-data
 
       # Mount filesystem paths you want to scan (read-only recommended)
       # - /opt/myapp:/data/app:ro
@@ -39,12 +87,68 @@ services:
       # Persistent Grype vulnerability DB cache (avoids re-download on restart)
       - grype-db:/root/.cache/grype
 
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - sbom-net
+
+  # ── Optional: small language model on CPU only ─────────────────────────────
+  # Writes the short "what does this mean / what to do" notes in alert mails.
+  # It never decides severity or whether an alert is sent. No GPU is used or reserved.
+  slm-init:
+    profiles: ["slm"]
+    image: curlimages/curl:8.10.1
+    user: "0"
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -s /models/model.gguf ]; then
+          curl -fL --retry 3 -o /models/model.gguf.part "${SLM_MODEL_URL:-https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf}" \
+            && mv /models/model.gguf.part /models/model.gguf
+        fi
+    volumes:
+      - slm-models:/models
+    networks:
+      - sbom-net
+
+  slm:
+    profiles: ["slm"]
+    image: ghcr.io/ggml-org/llama.cpp:server       # CPU build; the CUDA variants are separate tags
+    container_name: sbom-slm
+    restart: unless-stopped
+    depends_on:
+      slm-init:
+        condition: service_completed_successfully
+    command: ["-m", "/models/model.gguf", "--host", "0.0.0.0", "--port", "8080",
+              "-c", "4096", "-t", "${SLM_THREADS:-4}", "-np", "1"]
+    cpus: ${SLM_CPUS:-4}
+    mem_limit: ${SLM_MEM:-3g}
+    volumes:
+      - slm-models:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - sbom-net
 
 volumes:
   sbom-reports:
+  sbom-data:
   grype-db:
+  slm-models:
 
 networks:
   sbom-net:
