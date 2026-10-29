@@ -80,6 +80,7 @@ class Settings:
     alert_epss_threshold: float = 0.5                 # High + EPSS >= x also alerts; 0 disables
     alert_on_first_scan: bool = False                 # first scan of a target goes to the digest, not instant mail
     alert_min_interval_minutes: int = 30
+    alert_urgent_min_interval_minutes: int = 10      # KEV/malware mails are bundled, 0 = send at once
     alert_max_items: int = 25
 
     # ── mail ─────────────────────────────────────────────────────────────────
@@ -172,6 +173,7 @@ class Settings:
             alert_epss_threshold=_float("ALERT_EPSS_THRESHOLD", 0.5),
             alert_on_first_scan=_bool("ALERT_ON_FIRST_SCAN", False),
             alert_min_interval_minutes=max(1, _int("ALERT_MIN_INTERVAL_MINUTES", 30)),
+            alert_urgent_min_interval_minutes=max(0, _int("ALERT_URGENT_MIN_INTERVAL_MINUTES", 10)),
             alert_max_items=max(5, _int("ALERT_MAX_ITEMS", 25)),
             smtp_host=os.getenv("SMTP_HOST", ""),
             smtp_port=_int("SMTP_PORT", 465 if smtp_ssl else 587),

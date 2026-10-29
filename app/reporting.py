@@ -267,8 +267,9 @@ def dispatch_alerts(cfg: Settings, store: Store, slm: SlmClient) -> dict:
 
     urgent = bool(malware) or any(p == PRIO_KEV for _, p in findings)
     age = store.kv_age("last_alert_sent_at")
-    if age is not None and not urgent and age < timedelta(minutes=cfg.alert_min_interval_minutes):
-        return {"sent": False, "reason": "rate-limited"}
+    minutes = cfg.alert_urgent_min_interval_minutes if urgent else cfg.alert_min_interval_minutes
+    if age is not None and age < timedelta(minutes=minutes):
+        return {"sent": False, "reason": "rate-limited"}          # stays pending, the next cycle sends it all in one mail
 
     subject, text, html, urgent = build_alert(cfg, findings, malware, slm)
     count = len(findings) + len(malware)

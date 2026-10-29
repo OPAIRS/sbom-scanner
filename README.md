@@ -90,8 +90,8 @@ A target is scanned when it is **new**, its **image changed**, the **vulnerabili
 
 | Level | When | Mail |
 |---|---|---|
-| Malware | A component matches an OSV `MAL-*` advisory | instant, high priority |
-| KEV | Finding is in the CISA Known Exploited Vulnerabilities catalog (Grype's data or the feed) | instant, high priority |
+| Malware | A component matches an OSV `MAL-*` advisory | high priority, bundled like KEV |
+| KEV | Finding is in the CISA Known Exploited Vulnerabilities catalog (Grype's data or the feed) | high priority, at most every `ALERT_URGENT_MIN_INTERVAL_MINUTES` (10) |
 | Severity | Severity ≥ `ALERT_MIN_SEVERITY` (default `Critical`) | instant, at most every `ALERT_MIN_INTERVAL_MINUTES` |
 | EPSS | `High` and EPSS ≥ `ALERT_EPSS_THRESHOLD` (default 0.5) | like *Severity* |
 
@@ -173,7 +173,8 @@ All configuration is via environment variables (see `docker-compose.yml`).
 | `ALERT_ON_KEV` | `true` | Actively exploited always alerts |
 | `ALERT_EPSS_THRESHOLD` | `0.5` | `High` + EPSS ≥ x alerts; `0` disables |
 | `ALERT_ON_FIRST_SCAN` | `false` | Announce the initial inventory instantly |
-| `ALERT_MIN_INTERVAL_MINUTES` / `ALERT_MAX_ITEMS` | `30` / `25` | Rate limit and mail size (KEV/malware bypass the rate limit) |
+| `ALERT_MIN_INTERVAL_MINUTES` / `ALERT_MAX_ITEMS` | `30` / `25` | Rate limit and mail size |
+| `ALERT_URGENT_MIN_INTERVAL_MINUTES` | `10` | Minimum gap between KEV/malware mails; findings that arrive in between are sent together (`0` = immediately) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` (or `SMTP_PASSWORD_FILE`) | — | `SMTP_STARTTLS=true` (default) or `SMTP_SSL=true` |
 | `MAIL_FROM`, `MAIL_TO` | — | `MAIL_TO` is comma-separated |
 | `REPORT_LANG`, `REPORT_TZ`, `REPORT_HOST_LABEL` | `de`, `UTC`, hostname | Mail language (`de`/`en`), time zone, label in subjects |

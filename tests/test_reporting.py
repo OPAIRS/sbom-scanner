@@ -71,6 +71,7 @@ def test_alert_orders_kev_first_and_contains_actions_and_links(mail_cfg, store, 
 
 
 def test_no_duplicate_alerts_and_rate_limit(mail_cfg, store, outbox):
+    mail_cfg.alert_urgent_min_interval_minutes = 0                       # KEV mails at once for this test
     seed(store, mail_cfg, [finding("CVE-2024-1")])
     assert reporting.dispatch_alerts(mail_cfg, store, FakeSlm(mail_cfg))["sent"]
     assert reporting.dispatch_alerts(mail_cfg, store, FakeSlm(mail_cfg))["reason"] == "nothing to report"
@@ -186,3 +187,17 @@ def test_group_findings_keeps_order_and_collects_targets():
     grouped = reporting.group_findings(rows)
     assert [g["vuln_id"] for g in grouped] == ["X", "Y"]
     assert grouped[0]["targets"] == ["a", "b"] and len(grouped[0]["pkgs"]) == 1
+
+
+def test_urgent_alerts_are_bundled_within_the_urgent_interval(mail_cfg, store, outbox):
+    seed(store, mail_cfg, [finding("CVE-2024-1", kev=True)])
+    assert reporting.dispatch_alerts(mail_cfg, store, FakeSlm(mail_cfg))["sent"]
+    store.ingest_findings("app:1", [finding("CVE-2024-1", kev=True), finding("CVE-2024-2", kev=True)],
+                          prio(mail_cfg), baseline=False)
+    assert reporting.dispatch_alerts(mail_cfg, store, FakeSlm(mail_cfg))["reason"] == "rate-limited"
+    assert len(store.alertable_findings(prio(mail_cfg))) == 1            # still pending, not lost
+    from datetime import timedelta
+    from common import iso, utcnow
+    store.kv_set("last_alert_sent_at", iso(utcnow() - timedelta(minutes=11)))
+    assert reporting.dispatch_alerts(mail_cfg, store, FakeSlm(mail_cfg))["sent"]
+    assert len(outbox) == 2
