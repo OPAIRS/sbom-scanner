@@ -283,6 +283,14 @@ curl -X POST http://localhost:8100/scan \
 
 The scheduler runs `grype db update` every `DB_UPDATE_HOURS`; scans themselves never block on the network (`GRYPE_DB_AUTO_UPDATE=false` while the scheduler is on). A changed DB makes all targets due again — in batches. Without the scheduler, Grype updates its DB on every scan as before.
 
+### Updating Syft and Grype
+
+Syft and Grype are built from source in the first Docker stage, at the versions in `SYFT_VERSION` and `GRYPE_VERSION` (`Dockerfile`). To update, raise the version there (or pass `--build-arg SYFT_VERSION=v…`) and rebuild. `GO_DEP_OVERRIDES` forces single Go dependencies to a fixed version when upstream has not released one yet; it currently lifts `andybalholm/brotli` to v1.2.8 (GO-2026-6888 / CVE-2026-111497, CISA KEV). Remove the entry once an upstream release carries the fix. Check what an image contains with:
+
+```bash
+docker exec opairs-sbom-scanner syft /usr/local/bin -o table -q | grep -i brotli
+```
+
 For air-gapped environments set `OFFLINE_MODE=true`, build with `--build-arg SEED_GRYPE_DB=1` or populate the `grype-db` volume following the [Grype offline DB docs](https://github.com/anchore/grype#offline-and-air-gapped-environments). KEV/EPSS data inside Grype's DB is still used.
 
 ---
